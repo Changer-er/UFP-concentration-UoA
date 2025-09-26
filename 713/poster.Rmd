@@ -1,0 +1,188 @@
+---
+title: "poster"
+author: "Chang Liu"
+date: "2025-09-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r library}
+library(readxl)
+library(tibble)
+library(tidyverse)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(janitor)
+library(lubridate)
+library(openxlsx)
+library(tinytex)
+```
+
+## Loading dataset
+
+Loading the UFP dataset and combined the data
+```{r dataset}
+
+sheets <- excel_sheets("ENV713_UFP.xlsx")
+
+df_all <- lapply(sheets, function(s){
+  df <- read_excel("ENV713_UFP.xlsx", 
+                   sheet = s,
+                   col_types = c(
+                   "date",  # Date
+                   "date",  # Time
+                   "numeric", # Pt Conc
+                   "numeric",
+                   "numeric",
+                   "text"   # route 列强制为字符
+                  ))
+  df$sheetname <- s
+  df$Route <- as.character(df$Route)
+  return (df)
+}) %>% bind_rows()
+
+df_all
+unique(df_all$Route)
+```
+
+
+## subdivide the df_all into different week
+
+```{r df_sub}
+df_period <- df_all %>% 
+  mutate(
+    Day = str_extract(sheetname,"Mon|Tue|Wed|Thu"),
+    period = str_extract(sheetname, "AM|PM")
+  )
+
+df_period$Time <- hms::as_hms(df_period$Time)
+
+df_period
+write.csv(df_period,"df_export.csv", row.names = FALSE)
+```
+
+
+### Peak hours analyse
+
+Morning and afternoon peak hours
+
+```{R peak hours, fig.width=10, fig.height=12}
+
+
+ufp_period <- ggplot(df_period, aes(period, `Pt Conc`)) +
+  geom_boxplot(outlier.colour = "blue", outlier.alpha = 0.3) +
+  facet_wrap( ~Date, scale = "free") +
+  theme_minimal()
+ufp_period
+
+ggsave(
+    filename = paste0("plot_PEAK.png"),  # 导出的文件名
+    plot = ufp_period,                  # 对应的 ggplot
+    width = 8, height = 6, dpi = 300        # 图片大小和分辨率
+  )
+```
+```{r peak2, fig.width=12, fig.height=10}
+df_period <- df_period %>%
+  filter(!is.na(Route),!is.na(Time),!is.na(`Pt Conc`))
+
+ufp_period_day <- ggplot(df_period, aes(Route, `Pt Conc`)) +
+  geom_boxplot(outlier.colour = "blue", outlier.alpha = 0.3) +
+  coord_flip() +
+  theme_minimal() +   # 横置
+  labs(
+    x = "UFP Concentration (pt/cc)",   # 横坐标标签
+    y = "Route"                   # 纵坐标标签
+  )
+ufp_period_day
+
+ggsave(
+    filename = paste0("plot_PEAK.png"),  # 导出的文件名
+    plot = ufp_period_day,                  # 对应的 ggplot
+    width = 8, height = 6, dpi = 300        # 图片大小和分辨率
+  )
+```
+### Routes analyse
+
+Route analyse
+```{R route, fig.width=10, fig.height=8}
+
+df_route <- df_period %>%
+  filter(!is.na(Route),!is.na(Time),!is.na(`Pt Conc`))
+
+ufp_route <- ggplot(df_route, aes(Time, `Pt Conc`, colour = Route)) +
+  geom_line() +
+  facet_wrap( ~Date, scale = "free") +
+  theme_minimal()
+
+ufp_route
+
+```
+
+### peak conc ufp
+
+ufp peak plot
+```{R peak_ufp,fig.width=10, fig.height=6}
+df_minute <- df_period %>%
+  filter(!is.na(Route)) %>%
+  mutate(minute = minute(Time))
+
+df_list <- df_minute %>% 
+  group_by(Day) %>% 
+  group_split()
+
+
+ufp_spike_list <- lapply(df_list, function(df_day){ 
+  df_day %>%
+    group_by(Route, minute = cut(minute, breaks = 20)) %>%
+    filter(`Pt Conc`== max(`Pt Conc`)) %>%
+    filter(`Pt Conc` >= 50000) %>% data.frame()
+  })
+
+plot_list <- lapply(seq_along(df_list), function(i){
+  df_day <- df_list[[i]]
+  spike_day <- ufp_spike_list[[i]]
+  
+  ggplot(df_day,aes(Time, `Pt Conc`, colour = Route)) +
+    geom_line() +
+    facet_wrap(~period, scale = "free")+
+    geom_point(data = spike_day, aes(Time, Pt.Conc),col = "black") +
+    labs(x="Time", y= "UFP concentration(pt/cc)",title = "UFP exposure spike through time") +
+    theme_minimal()
+  })
+
+plot_list
+
+for (i in seq_along(plot_list)) {
+  ggsave(
+    filename = paste0("plot_", i, ".png"),  # 导出的文件名
+    plot = plot_list[[i]],                  # 对应的 ggplot
+    width = 8, height = 6, dpi = 300        # 图片大小和分辨率
+  )
+}
+
+```
+
+### export the plot_list
+
+```{R export}
+
+names(df_list)
+for (i in seq_along(ufp_spike_list)){
+  write.csv(ufp_spike_list[[i]],
+            file = paste0("spike_",i,".csv"),
+            row.names = FALSE)
+  
+  print("!")
+}
+
+```
+
+
+
+ 
